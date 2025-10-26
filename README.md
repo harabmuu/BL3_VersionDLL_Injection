@@ -4,7 +4,7 @@ A quick/simple way of having plugins get loaded into (any game probably) Borderl
 ### A greateful thanks to <ins>_AI_</ins> for helping me with the code.
 
 # Installation
-1. Download `D3D11.zip` from [Releases](https://github.com/FromDarkHell/BL3DX11Injection/releases)
+1. Download `version.dll` from [Releases](https://github.com/FromDarkHell/BL3DX11Injection/releases)
 2. Drag into `Borderlands3\OakGame\Binaries\Win64`
 ![Example Installation](/docs/explorer_b23pLEq9zz.png)
 3. Any DLL based plugins go into `Borderlands3\OakGame\Binaries\Win64\Plugins`
