@@ -1,5 +1,7 @@
-## BL3 DX11 Injection
+## BL3 version.dll Injection mod
 A quick/simple way of having plugins get loaded into (any game probably) Borderlands 3.
+
+### A greateful thanks to <ins>_AI_</ins> for helping me with the code.
 
 # Installation
 1. Download `D3D11.zip` from [Releases](https://github.com/FromDarkHell/BL3DX11Injection/releases)

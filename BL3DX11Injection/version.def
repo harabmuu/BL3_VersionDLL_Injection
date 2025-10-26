@@ -1,0 +1,7 @@
+EXPORTS
+GetFileVersionInfoA=_GetFileVersionInfoA
+GetFileVersionInfoW=_GetFileVersionInfoW
+GetFileVersionInfoSizeA=_GetFileVersionInfoSizeA
+GetFileVersionInfoSizeW=_GetFileVersionInfoSizeW
+VerQueryValueA=_VerQueryValueA
+VerQueryValueW=_VerQueryValueW

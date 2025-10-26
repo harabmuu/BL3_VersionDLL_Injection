@@ -3,74 +3,119 @@
 #include "dllmain.h"
 #include "PluginLoadHook.h"
 #include "ThreadManager.hpp"
-#pragma pack(1)
 
-static HINSTANCE hL;
+static HINSTANCE hOriginalVersion = NULL;
 static HMODULE gameModule;
 
-FARPROC p[3] = { 0 };
+// Function pointers for original version.dll functions
+static FARPROC pGetFileVersionInfoSizeW = NULL;
+static FARPROC pGetFileVersionInfoW = NULL;
+static FARPROC pVerQueryValueW = NULL;
+static FARPROC pGetFileVersionInfoSizeA = NULL;
+static FARPROC pGetFileVersionInfoA = NULL;
+static FARPROC pVerQueryValueA = NULL;
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD  reason, LPVOID) {
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID lpReserved) {
     if (reason == DLL_PROCESS_ATTACH) {
-        std::string cmdArgs = GetCommandLineA(); // Get the command line args for our running process
-                                                 
-        // If we're running in debug mode, we wanna allocate the console
+        // Store the module handle
+        gameModule = hModule;
+
+        std::string cmdArgs = GetCommandLineA();
         if (cmdArgs.find("--debug") != std::string::npos) {
-            AllocConsole(); // Allocate our console
-            InitializeConsole(); // Redirect stdout, etc to the console
+            AllocConsole();
+            InitializeConsole();
         }
 
-        LogString(L"Console allocated...\n");
-        LogString(L"==== Debug ====\n");
+        LogString(L"Version proxy DLL loaded...\n");
 
-        LogString(L"Suspending all other threads...\n");
+        // Load the original version.dll from system directory
+        wchar_t systemPath[MAX_PATH];
+        GetSystemDirectoryW(systemPath, MAX_PATH);
+        std::wstring versionPath = std::wstring(systemPath) + L"\\version.dll";
 
-        // Suspend all other threads to prevent a giant race condition
-        ThreadManager::Suspend();
+        hOriginalVersion = LoadLibraryW(versionPath.c_str());
+        if (!hOriginalVersion) {
+            LogString(L"Failed to load original version.dll: " + GetLastErrorAsString() + L"\n");
+            return FALSE;
+        }
 
-        wchar_t DX11Path[MAX_PATH];
-        GetSystemDirectory(DX11Path, MAX_PATH);
-        wcscat_s(DX11Path, L"\\d3d11.dll");
+        LogString(L"Original version.dll loaded successfully\n");
 
-        hL = LoadLibrary(DX11Path);
-        p[0] = GetProcAddress(hL, "D3D11CoreCreateDevice");
-        p[1] = GetProcAddress(hL, "D3D11CreateDevice");
-        p[2] = GetProcAddress(hL, "D3D11CreateDeviceAndSwapChain");
+        // Get function pointers
+        pGetFileVersionInfoSizeW = GetProcAddress(hOriginalVersion, "GetFileVersionInfoSizeW");
+        pGetFileVersionInfoW = GetProcAddress(hOriginalVersion, "GetFileVersionInfoW");
+        pVerQueryValueW = GetProcAddress(hOriginalVersion, "VerQueryValueW");
+        pGetFileVersionInfoSizeA = GetProcAddress(hOriginalVersion, "GetFileVersionInfoSizeA");
+        pGetFileVersionInfoA = GetProcAddress(hOriginalVersion, "GetFileVersionInfoA");
+        pVerQueryValueA = GetProcAddress(hOriginalVersion, "VerQueryValueA");
 
-        gameModule = hModule;
+        if (!pGetFileVersionInfoSizeW) {
+            LogString(L"Failed to get function pointers from version.dll\n");
+        }
+
+        // Disable thread calls to reduce overhead
         DisableThreadLibraryCalls(hModule);
 
-        // Resume all other threads.
-        LogString(L"Resuming all other threads...\n");
-        ThreadManager::Resume();
-
-        CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)executionThread, NULL, NULL, NULL);
+        // Start our plugin system in a separate thread
+        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)executionThread, NULL, 0, NULL);
     }
-    else if (reason == DLL_PROCESS_DETACH || reason == DLL_THREAD_DETACH) {
-        FreeLibrary(hL);
+    else if (reason == DLL_PROCESS_DETACH) {
+        if (hOriginalVersion) {
+            FreeLibrary(hOriginalVersion);
+        }
     }
     return TRUE;
 }
 
 int executionThread() {
     InitializePluginHooks(gameModule);
-    return TRUE;
+    return 0;
 }
 
-// This is all required in order to be actually fully loaded by the game.
+// Export the functions without redefining them
+// We'll use the .def file to handle the exports
 
-// typedefs used from: https://github.com/doitsujin/dxvk/blob/master/src/d3d11/d3d11_main.cpp
-typedef HRESULT(D3D11CoreCreateDev)(void* fact, void* adapt, unsigned int flag, void* fl, unsigned int featureLevels, void** ppDev);
-DLLExport HRESULT D3D11CoreCreateDevice(void* fact, void* adapt, unsigned int flag, void* fl, unsigned int featureLevels, void** ppDev) {
-    return ((D3D11CoreCreateDev*)p[0]) (fact, adapt, flag, fl, featureLevels, ppDev);
-}
+// Wrapper functions that forward to the original version.dll
+extern "C" {
+    __declspec(dllexport) DWORD _GetFileVersionInfoSizeW(LPCWSTR lptstrFilename, LPDWORD lpdwHandle) {
+        if (pGetFileVersionInfoSizeW) {
+            return ((DWORD(WINAPI*)(LPCWSTR, LPDWORD))pGetFileVersionInfoSizeW)(lptstrFilename, lpdwHandle);
+        }
+        return 0;
+    }
 
-typedef HRESULT(D3D11CreateDev)(void* adapt, unsigned int dt, void* soft, unsigned int flags, int* ft, unsigned int fl, unsigned int ver, void** ppDevice, void* featureLevel, void** context);
-DLLExport HRESULT D3D11CreateDevice(void* adapt, unsigned int dt, void* soft, unsigned int flags, int* ft, unsigned int fl, unsigned int ver, void** ppDevice, void* featureLevel, void** context) {
-    return ( (D3D11CreateDev*)p[1] ) (adapt, dt, soft, flags, ft, fl, ver, ppDevice, featureLevel, context);
-}
+    __declspec(dllexport) BOOL _GetFileVersionInfoW(LPCWSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData) {
+        if (pGetFileVersionInfoW) {
+            return ((BOOL(WINAPI*)(LPCWSTR, DWORD, DWORD, LPVOID))pGetFileVersionInfoW)(lptstrFilename, dwHandle, dwLen, lpData);
+        }
+        return FALSE;
+    }
 
-typedef HRESULT(D3D11CreateDevAndSwapChain)(void* adapt, unsigned int dt, void* soft, unsigned int flags, int* ft, unsigned int fl, unsigned int ver, void* swapChainDesc, void** swapChain, void** ppDevice, void* featureLevel, void** context);
-DLLExport HRESULT D3D11CreateDeviceAndSwapChain(void* adapt, unsigned int dt, void* soft, unsigned int flags, int* ft, unsigned int fl, unsigned int ver, void* swapChainDesc, void** swapChain, void** ppDevice, void* featureLevel, void** context) {
-    return ((D3D11CreateDevAndSwapChain*)p[2]) (adapt, dt, soft, flags, ft, fl, ver, swapChainDesc, swapChain, ppDevice, featureLevel, context);
+    __declspec(dllexport) BOOL _VerQueryValueW(LPCVOID pBlock, LPCWSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen) {
+        if (pVerQueryValueW) {
+            return ((BOOL(WINAPI*)(LPCVOID, LPCWSTR, LPVOID*, PUINT))pVerQueryValueW)(pBlock, lpSubBlock, lplpBuffer, puLen);
+        }
+        return FALSE;
+    }
+
+    __declspec(dllexport) DWORD _GetFileVersionInfoSizeA(LPCSTR lptstrFilename, LPDWORD lpdwHandle) {
+        if (pGetFileVersionInfoSizeA) {
+            return ((DWORD(WINAPI*)(LPCSTR, LPDWORD))pGetFileVersionInfoSizeA)(lptstrFilename, lpdwHandle);
+        }
+        return 0;
+    }
+
+    __declspec(dllexport) BOOL _GetFileVersionInfoA(LPCSTR lptstrFilename, DWORD dwHandle, DWORD dwLen, LPVOID lpData) {
+        if (pGetFileVersionInfoA) {
+            return ((BOOL(WINAPI*)(LPCSTR, DWORD, DWORD, LPVOID))pGetFileVersionInfoA)(lptstrFilename, dwHandle, dwLen, lpData);
+        }
+        return FALSE;
+    }
+
+    __declspec(dllexport) BOOL _VerQueryValueA(LPCVOID pBlock, LPCSTR lpSubBlock, LPVOID* lplpBuffer, PUINT puLen) {
+        if (pVerQueryValueA) {
+            return ((BOOL(WINAPI*)(LPCVOID, LPCSTR, LPVOID*, PUINT))pVerQueryValueA)(pBlock, lpSubBlock, lplpBuffer, puLen);
+        }
+        return FALSE;
+    }
 }
